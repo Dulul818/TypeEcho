@@ -39,7 +39,7 @@ async function main() {
     results.push(result);console.log(JSON.stringify(result));
   }
   const the=await request('the',1);
-  const approved=await fs.readFile(path.resolve('.test-output/the-bg3-stable.wav'));
+  const approved=await fs.readFile(path.resolve(process.argv[2] || '.local/voice-samples/the-bg3-stable.wav'));
   const position=approved.indexOf(Buffer.from('data'),12);
   assert.equal(the.seconds,approved.readUInt32LE(position+4)/48000,'approved the duration is unchanged');
   assert.deepEqual(the.audio,approved,'approved the audio is unchanged');
