@@ -1,0 +1,11 @@
+{
+  "version": "0.2.0",
+  "configurations": [{
+    "name": "运行 TypeEcho 扩展",
+    "type": "extensionHost",
+    "request": "launch",
+    "preLaunchTask": "build",
+    "args": ["--extensionDevelopmentPath=${workspaceFolder}"],
+    "outFiles": ["${workspaceFolder}/dist/**/*.cjs"]
+  }]
+}

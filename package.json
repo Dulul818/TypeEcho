@@ -1,0 +1,197 @@
+{
+  "name": "code-type-bridge",
+  "displayName": "TypeEcho 键语",
+  "description": "在 VS Code 中练习英文打字，连接 Monkeytype，支持逐词跟读、异步语音预生成和参考音频管理。",
+  "version": "1.0.0",
+  "publisher": "local-prototype",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Dulul818/TypeEcho.git"
+  },
+  "homepage": "https://github.com/Dulul818/TypeEcho#readme",
+  "bugs": {
+    "url": "https://github.com/Dulul818/TypeEcho/issues"
+  },
+  "packageManager": "pnpm@11.19.0",
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./dist/extension.cjs",
+  "extensionKind": [
+    "ui"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false
+    }
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "codeType.references",
+        "title": "TypeEcho: 参考音频与试听"
+      },
+      {
+        "command": "codeType.ttsSettings",
+        "title": "TypeEcho: 语音设置"
+      },
+      {
+        "command": "codeType.connect",
+        "title": "TypeEcho: 打开官网 / 登录"
+      },
+      {
+        "command": "codeType.start",
+        "title": "TypeEcho: 用当前文件开始练习"
+      },
+      {
+        "command": "codeType.stop",
+        "title": "TypeEcho: 退出练习"
+      },
+      {
+        "command": "codeType.result",
+        "title": "TypeEcho: 查看官网保存结果"
+      },
+      {
+        "command": "codeType.resetProgress",
+        "title": "TypeEcho: 从头显示当前文件"
+      },
+      {
+        "command": "codeType.selectRelayFiles",
+        "title": "TypeEcho: 选择接力文件"
+      },
+      {
+        "command": "codeType.clearRelayFiles",
+        "title": "TypeEcho: 清空接力队列"
+      }
+    ],
+    "configuration": {
+      "title": "TypeEcho 键语",
+      "properties": {
+        "codeType.ttsReferenceLibrary": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "参考音频列表 JSON 的绝对路径，包含 audio、text 和 language。音频相对路径以该文件目录为基准。"
+        },
+        "codeType.ttsReference": {
+          "type": "object",
+          "scope": "machine",
+          "required": [
+            "audio",
+            "text",
+            "language"
+          ],
+          "properties": {
+            "audio": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            },
+            "language": {
+              "type": "string",
+              "enum": [
+                "en",
+                "zh",
+                "ja",
+                "ko",
+                "yue"
+              ]
+            }
+          },
+          "description": "参考音频面板保存的当前录音与字幕，优先于单独的参考音频设置。"
+        },
+        "codeType.ttsProvider": {
+          "type": "string",
+          "enum": [
+            "custom",
+            "gpt-sovits"
+          ],
+          "enumDescriptions": [
+            "现有 XTTS、Kokoro 或通用接口。",
+            "官方 GPT-SoVITS api_v2.py，包括 v2ProPlus；需要固定参考音频和文本。"
+          ],
+          "default": "custom",
+          "scope": "machine",
+          "description": "自定义语音接口类型。GPT-SoVITS 的接口通常为 http://127.0.0.1:9880/tts。"
+        },
+        "codeType.ttsReferenceAudio": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "GPT-SoVITS 参考录音的绝对路径（语音服务所在机器上的路径）。建议干净、完整的 3–10 秒 WAV。不会每次上传文件。"
+        },
+        "codeType.ttsReferenceText": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "GPT-SoVITS 参考录音中实际说出的完整文本，必须与录音一致。"
+        },
+        "codeType.ttsReferenceLanguage": {
+          "type": "string",
+          "enum": [
+            "en",
+            "zh",
+            "ja",
+            "ko",
+            "yue"
+          ],
+          "default": "en",
+          "scope": "machine",
+          "description": "GPT-SoVITS 参考录音语言。练习目标文本仍按英文朗读。"
+        },
+        "codeType.ttsVoice": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "TTS 音色名称。系统模式填写桌面语音名称；通用接口作为 voice 字段发送。GPT-SoVITS 由服务加载的模型和参考音频决定音色，忽略此项。"
+        },
+        "codeType.nativeCompletions": {
+          "type": "boolean",
+          "default": false,
+          "description": "使用语言服务获取真实补全。部分语言插件会因此刷新问题徽标；默认仅显示当前文件符号补全。"
+        },
+        "codeType.ttsRate": {
+          "type": "number",
+          "default": 1,
+          "minimum": 0.5,
+          "maximum": 2,
+          "scope": "machine",
+          "description": "TTS 语速倍率，1 为正常，建议练单词时 0.85–1。系统语音近似换算，通用接口发送 rate，GPT-SoVITS 发送 speed_factor。"
+        },
+        "codeType.ttsEndpoint": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "自定义 TTS HTTP(S) 接口，返回 audio/* 音频字节。通用模式发送 {text, language: en-US, voice, rate}；GPT-SoVITS 模式使用官方 /tts 格式。text 为官网练习单词/句段，最多 1200 字符，不发送代码。留空使用系统语音。"
+        },
+        "codeType.browserPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "浏览器可执行文件的绝对路径。留空时仅自动查找 Google Chrome，不会回退到 Edge。"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "esbuild src/extension.js --bundle --platform=node --format=cjs --external:vscode --outfile=dist/extension.cjs",
+    "test": "node --test test/*.test.js",
+    "test:ui": "node test/ui-smoke.js",
+    "test:browser": "node test/browser-smoke.js && node test/result-smoke.js",
+    "package": "pnpm build && node scripts/package.js"
+  },
+  "dependencies": {
+    "highlight.js": "^11.11.1",
+    "lz-ts": "^1.1.2"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "^3.6.0",
+    "esbuild": "^0.25.0",
+    "playwright": "^1.63.0"
+  }
+}

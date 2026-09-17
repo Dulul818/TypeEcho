@@ -1,0 +1,16 @@
+node_modules/
+dist/
+*.vsix
+.test-output/
+models/
+runtime/
+.local/
+releases/
+config/*-local*
+*.log
+*.log.*
+.env
+.env.*
+!.env.example
+__pycache__/
+*.pyc

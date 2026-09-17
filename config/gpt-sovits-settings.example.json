@@ -1,0 +1,8 @@
+{
+  "codeType.ttsProvider": "gpt-sovits",
+  "codeType.ttsEndpoint": "http://127.0.0.1:9880/tts",
+  "codeType.ttsReferenceAudio": "D:/Models/reference.wav",
+  "codeType.ttsReferenceText": "Replace this with the exact words spoken in reference.wav.",
+  "codeType.ttsReferenceLanguage": "en",
+  "codeType.ttsRate": 1
+}
