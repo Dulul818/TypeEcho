@@ -14,8 +14,10 @@ src/
   extension.js          扩展入口、会话及消息协调
   browser.js            Chrome 管道、按键、官网状态和结果回执
   site.js               官网设置与结果读取
+  dictionaries.js       词库下载、导入导出、本地保存和分批选择
   completions.js        当前文件及语言服务补全建议
   code-progress.js      代码显示步长与旧进度恢复
+  relay-files.js        接力配置、工作区相对路径与旧队列兼容
   result-report.js      本地 JSON / HTML 报告
   speech/
     sentence.js         英文词清理、句段切分和上下文
@@ -47,6 +49,7 @@ docs/                   使用、接入、开发说明
 | `node test/references-ui-smoke.js config/gpt-sovits-local-settings.json` | 参考字幕、切换、录音解码及窄屏布局 | 本机参考库 |
 | `node test/gpt-sovits-live-smoke.js config/gpt-sovits-local-settings.json` | 真实短词/句子合成及缓存 | 已启动 GPT-SoVITS |
 | `node test/live-smoke.js` | 当前官网 DOM 读取 | 可联网，独立访客浏览器 |
+| `node test/dictionary-smoke.js` | 四个实际词库下载、官网 custom 顺序与有限结束位置 | 可联网，隔离访客浏览器，不输入或提交成绩 |
 | `node test/background-smoke.js` | Windows 窗口遮挡、最小化与恢复 | Windows 桌面 |
 
 输出位于 `.test-output/`，测试完成且相关浏览器关闭后可删除。模型检查产生语音 WAV，不自动提交官网成绩。旧 XTTS / Kokoro 诊断脚本仍保留，运行前需要对应服务，不能作为 GPT-SoVITS 必需检查。

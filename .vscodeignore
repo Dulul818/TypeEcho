@@ -10,6 +10,7 @@
 !media/references.js
 !media/references.css
 !docs/gpt-sovits.md
+!docs/dictionaries.md
 !config/gpt-sovits-infer.example.yaml
 !config/gpt-sovits-settings.example.json
 !CHANGELOG.md

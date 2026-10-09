@@ -22,16 +22,23 @@ function readResult() {
   const result = document.querySelector('#result');
   if (!result || !result.getClientRects().length || getComputedStyle(result).visibility === 'hidden') return null;
   const value = selector => (result.querySelector(selector)?.innerText || '').trim().replace(/\s+/g, ' ');
+  // Current result cards use data markers and visible labels instead of .group classes.
+  const stats = new Map(Array.from(result.querySelectorAll('[data-ui-element="resultStat"]'), card => {
+    const label = (card.firstElementChild?.textContent || '').trim().toLowerCase();
+    const element = card.querySelector('[data-ui-element="resultStatValue"]');
+    const text = label === 'time' ? element?.firstElementChild?.innerText || element?.innerText : element?.innerText;
+    return [label, (text || '').trim().replace(/\s+/g, ' ')];
+  }));
   const metrics = {
-    wpm: value('.group.wpm .bottom'), accuracy: value('.group.acc .bottom'),
-    raw: value('.group.raw .bottom'), characters: value('.group.key .bottom'),
-    consistency: value('.group.consistency .bottom'), time: value('.group.time .bottom .text') || value('.group.time .bottom'),
-    testType: value('.group.testType > .bottom'), source: value('.group.source .bottom'),
+    wpm: stats.get('wpm') || value('.group.wpm .bottom'), accuracy: stats.get('acc') || value('.group.acc .bottom'),
+    raw: stats.get('raw') || value('.group.raw .bottom'), characters: stats.get('characters') || value('.group.key .bottom'),
+    consistency: stats.get('consistency') || value('.group.consistency .bottom'), time: stats.get('time') || value('.group.time .bottom .text') || value('.group.time .bottom'),
+    testType: stats.get('test type') || value('.group.testType > .bottom'), source: stats.get('source') || value('.group.source .bottom'),
   };
   if (!/^\d/.test(metrics.wpm) || !/^\d/.test(metrics.accuracy)) return null;
   const visible = selector => { const el = result.querySelector(selector); return !!el && el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden'; };
   return {
-    metrics, loggedOut: visible('.loginTip'), retryVisible: visible('#retrySavingResultButton'),
+    metrics, loggedOut: visible('.loginTip, a[href="/login"]'), retryVisible: visible('#retrySavingResultButton'),
     level: readAccountLevel(),
   };
 }

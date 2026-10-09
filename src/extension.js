@@ -6,10 +6,12 @@ const { BrowserBridge, findBrowser, launchLogin } = require('./browser');
 const { suggestions } = require('./completions');
 const { writeReport } = require('./result-report');
 const { requestSpeech, createSystemSpeaker, createSpeechCache } = require('./speech/tts');
-const { codeProgress } = require('./code-progress');
+const { codeProgress, codeText, codeTypo } = require('./code-progress');
 const { updateWordFeedback } = require('../media/word-feedback');
 const { SentenceContext, MAX_TEXT, speechWord, sentenceWordCount } = require('./speech/sentence');
 const { registerReferencePanel } = require('./views/reference-panel');
+const { DictionaryStore, chooseDictionary } = require('./dictionaries');
+const { readRelayFiles, writeRelayFiles } = require('./relay-files');
 
 function progressKey(document, source) {
   const hash = crypto.createHash('sha256').update(source).digest('hex').slice(0, 20);
@@ -53,6 +55,17 @@ function activate(context) {
   let onReceipt;
   let showResult;
   let refreshRelay;
+  let relayResource;
+  let changeDictionary;
+  let choosingDictionary = false;
+  let dictionaryRound;
+  const dictionaries = new DictionaryStore(path.join(context.globalStorageUri.fsPath, 'dictionaries'));
+  async function applyDictionary(browser, round) {
+    const fresh = await browser.applyDictionary(await dictionaries.practiceFile(round.id), round);
+    dictionaryRound = { ...round, testId: fresh.testId };
+    await context.globalState.update('dictionarySelection', { ...round, native: true, pending: false, testId: undefined });
+    return fresh;
+  }
   const profile = path.join(context.globalStorageUri.fsPath, 'browser-profile');
   const executable = () => findBrowser(vscode.workspace.getConfiguration('codeType').get('browserPath'));
   const loginIsOpen = () => loginBrowser && loginBrowser.exitCode === null && loginBrowser.signalCode === null;
@@ -105,11 +118,21 @@ function activate(context) {
     if (!editor || !editor.document.getText()) throw new Error('请先打开一个有内容的代码文件。');
     let source = editor.document.getText().replace(/\r\n/g, '\n');
     if (source.length > 100000) throw new Error('支持最多 100,000 个字符，请选择较小的代码文件。');
+    const selectedRelayFiles = readRelayFiles(vscode, context, editor.document.uri);
     starting = true;
     try {
       const browser = await connect();
-      const state = await browser.attach();
+      let state = await browser.attach();
       if (!state.ready && !state.finished && !state.target) throw new Error(state.reason);
+      const selection = context.globalState.get('dictionarySelection');
+      if (selection) {
+        const library = await dictionaries.read(selection.id);
+        const selected = { id: library.id, name: library.name, kind: library.kind, total: library.entries.length,
+          size: selection.size, order: selection.order || 'shuffle', native: true };
+        if (selection.pending || !selection.native) state = await applyDictionary(browser, selected);
+        else if ((state.testMode === 'custom' || state.finished) && await browser.matchesDictionary(await dictionaries.practiceFile(selection.id))) dictionaryRound = { ...selected, testId: state.testId };
+        else await context.globalState.update('dictionarySelection', undefined);
+      }
       receipt = undefined;
       status.text = '$(plug)';
       status.tooltip = '尚未确认官网保存成绩。';
@@ -119,6 +142,7 @@ function activate(context) {
           localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'media')],
         });
       panel = current;
+      relayResource = editor.document.uri;
       const session = crypto.randomUUID();
       await sessionFinish;
       await progressWrites;
@@ -128,8 +152,7 @@ function activate(context) {
         const key = progressKey(document, source);
         return { document, source, key, ...codeProgress(source, context.globalState.get(key)) };
       }
-      async function relayFiles(first) {
-        const selected = context.globalState.get('relayFiles') || [];
+      async function relayFiles(first, selected) {
         const files = [first];
         const skipped = [];
         for (const address of [...new Set(selected)].filter(address => address !== first.document.uri.toString())) {
@@ -139,12 +162,12 @@ function activate(context) {
         if (skipped.length) void vscode.window.showWarningMessage(`已跳过 ${skipped.length} 个无法读取、为空或过大的接力文件。可重新选择接力文件。`);
         return files;
       }
-      let files = await relayFiles(snapshot(editor.document));
+      let files = await relayFiles(snapshot(editor.document), selectedRelayFiles);
       let fileIndex = 0;
-      let document, cuts, savedProgressKey, progress, language;
+      let document, cuts, savedProgressKey, progress, errors, language;
       function selectFile(index) {
         fileIndex = index;
-        ({ document, source, cuts, key: savedProgressKey, progress } = files[index]);
+        ({ document, source, cuts, key: savedProgressKey, progress, errors } = files[index]);
         language = ({ javascriptreact: 'javascript', typescriptreact: 'typescript', html: 'xml', c: 'cpp' })[document.languageId] || document.languageId;
         current.title = path.basename(document.fileName);
       }
@@ -153,7 +176,7 @@ function activate(context) {
         files[fileIndex].progress = progress;
         const key = savedProgressKey;
         const value = progress > 0
-          ? { progress, offset: cuts[progress], updatedAt: new Date().toISOString(), file: path.basename(document.fileName) } : undefined;
+          ? { progress, offset: cuts[progress], errors: [...errors], updatedAt: new Date().toISOString(), file: path.basename(document.fileName) } : undefined;
         progressWrites = progressWrites.then(() => context.globalState.update(key, value)).catch(error => {
           status.text = '$(warning)';
           status.tooltip = `代码进度保存失败：${error.message}`;
@@ -245,7 +268,7 @@ function activate(context) {
         if (!prefetchAllowed || !preferences.speechEnabled || !current.active || !lastState.ready || lastState.finished) { speechPreparationKey=undefined; return; }
         const {endpoint, options} = speechSettings();
         if (!endpoint) { preparation={ready:0,total:0,failed:0,system:true}; sendPreparation(); return; }
-        const wordMode = lastState.testMode === 'words' || preferences.speechMode === 'word';
+        const wordMode = lastState.testMode === 'words' || lastState.wordPractice || preferences.speechMode === 'word';
         if (!wordMode && browser.speechSnapshot && lastState.speechRevision && loadedSpeechRevision!==lastState.speechRevision && !speechTextRequest && Date.now()>=speechTextRetryAt) {
           const epoch=speechEpoch, generationAtRead=generation;
           speechTextError='';
@@ -315,6 +338,14 @@ function activate(context) {
           speechCache.clear();
         }
         if (message.type === 'state') {
+          if (dictionaryRound && message.testId && message.testId !== dictionaryRound.testId) {
+            dictionaryRound = undefined;
+            void context.globalState.update('dictionarySelection', undefined).catch(report);
+          }
+          if (dictionaryRound && (message.testMode === 'custom' && dictionaryRound.testId === message.testId || message.finished)) {
+            message = { ...message, wordPractice: dictionaryRound.kind === 'words',
+              dictionary: { name: dictionaryRound.name, order: message.customMode || dictionaryRound.order, size: message.customLimit?.value || dictionaryRound.size, total: dictionaryRound.total } };
+          }
           if (lastState.finished && message.target || message.testId && lastState.testId && message.testId!==lastState.testId) { preparation={ready:0,total:0,failed:0}; currentSpeechUnit=undefined; loadedSpeechRevision=undefined; speechTextRetryAt=0; speechTextError=''; sentenceContext.reset(); speechEpoch++; speechReach=-1; speechRequest?.abort(); systemSpeaker?.stop(); speechCache.clear(); }
           const context=sentenceContext.update(message);
           if(context.changed) { preparation={ready:0,total:0,failed:0}; currentSpeechUnit=undefined; speechEpoch++; speechReach=-1; speechRequest?.abort(); systemSpeaker?.stop(); speechCache.clear(); }
@@ -377,9 +408,10 @@ function activate(context) {
       }
       function completeHints(text) {
         clearTimeout(completionTimer);
-        post({ type: 'suggestions', items: suggestions(source, text.length) });
+        const displaySource = text + source.slice(cuts[progress]);
+        post({ type: 'suggestions', items: suggestions(displaySource, text.length) });
         // Language providers can publish transient diagnostics and shift VS Code's panel tabs.
-        if (!vscode.workspace.getConfiguration('codeType').get('nativeCompletions',false)) return;
+        if (errors.size || !vscode.workspace.getConfiguration('codeType').get('nativeCompletions',false)) return;
         if (!/[A-Za-z_$][\w$]{1,}$/.test(text)) return;
         const at = progress;
         const file = document;
@@ -388,7 +420,7 @@ function activate(context) {
             const lines = text.split('\n');
             const result = await vscode.commands.executeCommand('vscode.executeCompletionItemProvider', file.uri,
               new vscode.Position(lines.length - 1, lines.at(-1).length));
-            if (!disposed && document === file && progress === at && active) post({ type: 'suggestions', items: suggestions(source, text.length, result?.items || []) });
+            if (!disposed && document === file && progress === at && active) post({ type: 'suggestions', items: suggestions(displaySource, text.length, result?.items || []) });
           } catch { /* File symbols remain available when this language has no completion provider. */ }
         }, 100);
       }
@@ -396,7 +428,7 @@ function activate(context) {
         clearTimeout(renderTimer); renderTimer=undefined;
         reveal ||= revealPending; revealPending=false;
         // ponytail: highlight the bounded prefix each time; cache completed lines if large-file input becomes slow.
-        const text = source.slice(0, cuts[progress]);
+        const text = codeText(source, cuts, progress, errors);
         const html = hljs.getLanguage(language) ? hljs.highlight(text, { language, ignoreIllegals: true }).value : escapeHtml(text);
         post({ type: 'code', html, lines: text.split('\n').length, complete: progress === cuts.length - 1, reveal,
           fileName: path.basename(document.fileName), language: document.languageId, relayCount: files.length,
@@ -429,6 +461,7 @@ function activate(context) {
       const resetCurrentProgress = async () => {
         await halt('已从头显示，点击继续练习。');
         progress = 0;
+        errors.clear();
         await saveProgress();
         render(true);
       };
@@ -437,9 +470,10 @@ function activate(context) {
         if (actionBusy) throw new Error('正在准备测试，请稍后更新接力文件。');
         actionBusy = true;
         try {
+          const selected = readRelayFiles(vscode, context, relayResource);
           await halt('接力文件已更新，点击继续。');
           await saveProgress();
-          const updated = await relayFiles(files[fileIndex]);
+          const updated = await relayFiles(files[fileIndex], selected);
           if (disposed) return;
           files = updated;
           selectFile(0);
@@ -447,6 +481,39 @@ function activate(context) {
         } finally { actionBusy = false; }
       };
       refreshRelay = refreshCurrentRelay;
+      async function newRound(action, value) {
+        if (actionBusy) throw new Error('正在准备测试，请稍后再试。');
+        actionBusy = true;
+        post({ type: 'busy', text: '正在准备测试…' });
+        try {
+          await halt('正在准备测试…');
+          await resultWork;
+          let fresh;
+          if (action === 'dictionary') fresh = await applyDictionary(browser, value);
+          else if (action === 'settings') {
+            fresh = await browser.applySettings(value);
+            dictionaryRound = undefined;
+            await context.globalState.update('dictionarySelection', undefined);
+          } else {
+            fresh = await browser.nextTest(action === 'repeat-test');
+            if (dictionaryRound) dictionaryRound = { ...dictionaryRound, testId: fresh.testId };
+          }
+          receipt = undefined;
+          capturedRound = -1;
+          if (disposed) return;
+          post({ type: 'round-reset' });
+          prefetchAllowed = true;
+          post({ type: 'state', ...fresh });
+          render();
+          // Native pickers can leave focus outside the Webview. Resume only by click.
+          if (action !== 'dictionary' && current.active) { active = true; post({ type: 'armed' }); }
+        } finally {
+          actionBusy = false;
+          post({ type: 'busy', value: false });
+        }
+      }
+      const changeCurrentDictionary = round => newRound('dictionary', round);
+      changeDictionary = changeCurrentDictionary;
       current.webview.onDidReceiveMessage(message => {
         if (disposed || message.session !== session) return;
         if (message.type === 'ready') {
@@ -480,6 +547,9 @@ function activate(context) {
           void vscode.commands.executeCommand('codeType.ttsSettings');
         } else if (message.type === 'reference-settings') {
           void vscode.commands.executeCommand('codeType.references');
+        } else if (message.type === 'dictionaries') {
+          void halt('选择词库中；取消后点击继续。');
+          void vscode.commands.executeCommand('codeType.dictionaries');
         } else if (message.type === 'speech-retry') {
           speechCache.retryFailed(); speechPreparationKey=undefined; speechTextRetryAt=0;
           prepareSpeech();
@@ -487,14 +557,14 @@ function activate(context) {
           speechRequest?.abort();
           systemSpeaker?.stop();
         } else if (message.type === 'speech' && active && current.active && !actionBusy && lastState.ready && preferences.speechEnabled) {
-          const sentenceSpeech=(preferences.speechMode==='sentence' || preferences.speechMode==='hybrid' && message.unit==='sentence') && lastState.testMode!=='words';
+          const sentenceSpeech=(preferences.speechMode==='sentence' || preferences.speechMode==='hybrid' && message.unit==='sentence') && lastState.testMode!=='words' && !lastState.wordPractice;
           // A valid hybrid request can arrive after the next typing snapshot.
           const sentence=sentenceSpeech && message.sentenceId
             ? sentenceContext.segments.find(segment=>segment.start<=speechReach && `${segment.start}:${segment.end}`===message.sentenceId)
             : lastState.sentence;
           const earlyWord=!sentenceSpeech && message.wordIndex===lastState.wordIndex+1 && lastState.typed===lastState.target;
           const queuedWord=!sentenceSpeech && Number.isInteger(message.wordIndex) && message.wordIndex>=0 && message.wordIndex<=speechReach;
-          if (earlyWord && preferences.speechMode==='hybrid' && lastState.testMode!=='words' && message.wordIndex>=lastState.sentence?.end) return;
+          if (earlyWord && preferences.speechMode==='hybrid' && lastState.testMode!=='words' && !lastState.wordPractice && message.wordIndex>=lastState.sentence?.end) return;
           if (!sentenceSpeech && message.wordIndex!==undefined && !queuedWord && !earlyWord) return;
           const expected=sentenceSpeech ? sentence?.text : queuedWord ? sentenceContext.words.get(message.wordIndex) || (message.wordIndex===lastState.wordIndex ? lastState.target : undefined) : earlyWord ? sentenceContext.words.get(message.wordIndex) || lastState.next : lastState.target;
           if (message.epoch!==speechEpoch || message.text!==expected || typeof message.text!=='string' || message.text.length>MAX_TEXT || !/^[\x20-\x7e]+$/.test(message.text) || !Number.isInteger(message.id)) return;
@@ -535,24 +605,7 @@ function activate(context) {
             post({ type: 'state', ...fresh });
           })().catch(error => void halt(error.message));
         } else if (['next-test', 'repeat-test', 'settings'].includes(message.type) && !actionBusy) {
-          actionBusy = true;
-          post({ type: 'busy', text: '正在准备测试…' });
-          void (async () => {
-            await halt('正在准备测试…');
-            await resultWork;
-            const fresh = message.type === 'settings' ? await browser.applySettings(message.settings) : await browser.nextTest(message.type === 'repeat-test');
-            receipt = undefined;
-            capturedRound = -1;
-            if (disposed) return;
-            post({ type: 'round-reset' });
-            prefetchAllowed = true;
-            post({ type: 'state', ...fresh });
-            render();
-            if (current.active) { active = true; post({ type: 'armed' }); }
-          })().catch(error => post({ type: 'action-error', text: error.message })).finally(() => {
-            actionBusy = false;
-            post({ type: 'busy', value: false });
-          });
+          void newRound(message.type, message.settings).catch(error => post({ type: 'action-error', text: error.message }));
         } else if (message.type === 'key' && active && current.active && !actionBusy) {
           const received = message.sentAt;
           if (!Number.isFinite(received) || received > Date.now() + 1000) { void halt('输入时间无效，已暂停。'); return; }
@@ -562,6 +615,7 @@ function activate(context) {
           queue = queue.then(async () => {
             if (!active || disposed || generation !== keyGeneration) return;
             if (Date.now() - received > 250) throw new Error('输入延迟超过 250ms，已暂停，避免补发积压按键。');
+            const before = lastState;
             const fresh=await browser.sendKey(message.event);
             const event = message.event;
             if (event.type === 'keydown') down.set(event.code, event);
@@ -578,8 +632,14 @@ function activate(context) {
                 const next = files.findIndex((file, index) => index > fileIndex && file.progress < file.cuts.length - 1);
                 if (next !== -1) { selectFile(next); switched = true; }
               }
-              if (event.key === 'Backspace') progress = Math.max(0, progress - 1);
-              else if (/^[\x20-\x7e]$/.test(event.key)) progress = Math.min(cuts.length - 1, progress + 1);
+              if (event.key === 'Backspace') {
+                progress = Math.max(0, progress - 1);
+                errors.delete(progress);
+              } else if (/^[\x20-\x7e]$/.test(event.key) && progress < cuts.length - 1) {
+                const typo = codeTypo(source, cuts, progress, event.key, before);
+                if (typo !== undefined) errors.set(progress, typo);
+                progress++;
+              }
               saveProgress();
               if (switched || progress!==previousProgress) scheduleRender(switched);
             }
@@ -656,10 +716,11 @@ function activate(context) {
         wordStatus.dispose();
         systemSpeaker?.dispose();
         if (onReceipt === receiptHandler) { onReceipt = undefined; showResult = undefined; }
-        if (panel === current) panel = undefined;
+        if (panel === current) { panel = undefined; relayResource = undefined; }
         sessionFinish = halt('练习已结束。').then(saveProgress);
         if (resetProgress === resetCurrentProgress) resetProgress = undefined;
         if (refreshRelay === refreshCurrentRelay) refreshRelay = undefined;
+        if (changeDictionary === changeCurrentDictionary) changeDictionary = undefined;
         if (!editor.document.isClosed) void vscode.window.showTextDocument(editor.document, editor.viewColumn);
       });
       current.webview.html = htmlFor(current.webview, context.extensionUri, session, editor.document);
@@ -684,15 +745,29 @@ function activate(context) {
     'codeType.start': start,
     'codeType.ttsSettings': () => vscode.commands.executeCommand('workbench.action.openSettings','@ext:local-prototype.code-type-bridge tts'),
     'codeType.references': openReferences,
+    'codeType.dictionaries': async () => {
+      if (choosingDictionary) return;
+      choosingDictionary = true;
+      try {
+        const round = await chooseDictionary(vscode, dictionaries);
+        if (!round) return;
+        if (changeDictionary) await changeDictionary(round);
+        else {
+          await context.globalState.update('dictionarySelection', { ...round, pending: true });
+          void vscode.window.showInformationMessage(`已选择 ${round.name}；打开代码文件并开始练习即可自动导入。`);
+        }
+      } finally { choosingDictionary = false; }
+    },
     'codeType.selectRelayFiles': async () => {
       const selected = await vscode.window.showOpenDialog({ canSelectFiles: true, canSelectFolders: false, canSelectMany: true,
         title: '选择接力代码文件（当前文件之后依次显示）', openLabel: '加入接力' });
       if (!selected) return;
-      await context.globalState.update('relayFiles', selected.map(uri => uri.toString()));
+      await writeRelayFiles(vscode, relayResource || vscode.window.activeTextEditor?.document.uri, selected);
       await refreshRelay?.();
       if (!panel) void vscode.window.showInformationMessage(`已记住 ${selected.length} 个接力文件，下次开始练习时使用。`);
     },
     'codeType.clearRelayFiles': async () => {
+      await writeRelayFiles(vscode, relayResource || vscode.window.activeTextEditor?.document.uri, []);
       await context.globalState.update('relayFiles', undefined);
       await refreshRelay?.();
     },

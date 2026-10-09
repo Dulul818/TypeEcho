@@ -20,9 +20,33 @@ test('practice uses a snapshot, forwards physical events, halts stale input, and
     async snapshot() { return this.state; }
     async waitForTest() { return this.snapshot(); }
     async captureResult() { return { metrics: { wpm: '25', accuracy: '95%', raw: '26', characters: '149/2/1/0', consistency: '13%', time: '01:12', testType: 'quote medium english' } }; }
-    async nextTest(repeat) { calls.push({ type: 'next', repeat }); this.round++; this.state = { ready: true, target: 'world', next: 'hello', typed: '' }; return this.state; }
-    async applySettings(settings) { calls.push({ type: 'settings', settings }); return this.nextTest(false); }
-    async sendKey(event) { calls.push(event); if(event.type==='keydown') return {...this.state,typed:event.key}; }
+    async nextTest(repeat) { calls.push({ type: 'next', repeat }); this.round++; this.state = this.nativeState ? { ...this.nativeState, testId: 'native-' + this.round } : { ready: true, target: 'world', next: 'hello', typed: '' }; return this.state; }
+    async matchesDictionary() { return !!this.nativeState; }
+    async applyDictionary(file, options) {
+      calls.push({ type: 'dictionary-import', file, options });
+      this.nativeState = { ready: true, target: 'one', next: 'two', typed: '', wordIndex: 0, testMode: 'custom', testId: 'native-' + (++this.round),
+        customMode: options.order, customLimit: { mode: 'section', value: options.size }, speechEnd: 2,
+        speechWords: [{index:0,text:'one'}, {index:1,text:'two'}] };
+      this.state = this.nativeState; return this.state;
+    }
+    async applySettings(settings) {
+      calls.push({ type: 'settings', settings });
+      if (settings.mode !== 'custom') { this.nativeState = undefined; return this.nextTest(false); }
+      this.round++;
+      this.state = { ready: true, target: settings.text[0], next: settings.text[1], typed: '', wordIndex: 0,
+        testId: `custom-${this.round}`, testMode: 'custom', speechEnd: settings.text.length,
+        speechWords: settings.text.map((text, index) => ({ text, index })) };
+      return this.state;
+    }
+    async sendKey(event) {
+      calls.push(event);
+      if (event.type !== 'keydown') return;
+      const typed = this.state.typed || '';
+      this.state = event.key === ' '
+        ? {...this.state, typed:'', wordIndex:(this.state.wordIndex || 0)+1, target:this.state.next || this.state.target, next:this.state.target}
+        : {...this.state, typed:event.key==='Backspace' ? typed.slice(0,-1) : typed+event.key};
+      return this.state;
+    }
     async release(events) { calls.push(...events.map(event => ({ ...event, type: 'keyup' }))); }
     async close() { this.closed = true; }
   }
@@ -149,7 +173,7 @@ test('practice uses a snapshot, forwards physical events, halts stale input, and
     assert.ok(messages.some(m => m.type === 'halt' && m.text.includes('250ms')));
     emit({ type: 'arm' });
     await delay(10);
-    emit({ type: 'key', sentAt: Date.now(), event });
+    emit({ type: 'key', sentAt: Date.now(), event: {...event, key:'e', code:'KeyE', keyCode:69} });
     await delay(10);
     current.active = false;
     viewChanged();
@@ -223,21 +247,36 @@ test('practice uses a snapshot, forwards physical events, halts stale input, and
     let selection = [nextDocument.uri, nextDocument.uri, uri('missing.js')];
     const warnings = [];
     vscode.Uri.parse = uri;
+    vscode.Uri.file = uri;
+    vscode.ConfigurationTarget = { Global: 1 };
+    let relaySetting;
+    const originalConfiguration = vscode.workspace.getConfiguration;
+    vscode.workspace.getConfiguration = (...args) => ({
+      get: name => name === 'relayFiles' ? relaySetting : originalConfiguration(...args).get(name),
+      inspect: () => ({}),
+      update: async (name, value) => { relaySetting = value; },
+    });
+    stored.set('relayFiles', ['old-queue.py']);
     vscode.window.showOpenDialog = async () => selection;
     vscode.window.showWarningMessage = text => warnings.push(text);
     vscode.workspace.openTextDocument = async address => {
-      if (address.toString() === nextDocument.uri.toString()) return nextDocument;
+      if (path.basename(address.fsPath) === nextDocument.uri.toString()) return nextDocument;
       throw new Error('missing');
     };
+    selection = selection.map(file => uri(path.resolve(file.fsPath)));
     await commands['codeType.selectRelayFiles']();
+    assert.equal(relaySetting.length, 2, 'picker writes deduplicated configuration paths');
     await commands['codeType.start']();
     emitCurrent({type:'ready'});
     emitCurrent({type:'arm'});
     await delay(10);
     const roundsBefore = browser.round;
     const press = async () => {
-      emitCurrent({type:'key',sentAt:Date.now(),event});
-      emitCurrent({type:'key',sentAt:Date.now(),event:{...event,type:'keyup'}});
+      const state = messages.filter(m=>m.type==='state').at(-1);
+      const key = state.target[state.typed?.length || 0] || ' ';
+      const correctEvent = {...event, key, code:key===' ' ? 'Space' : `Key${key.toUpperCase()}`, keyCode:key.toUpperCase().charCodeAt(0)};
+      emitCurrent({type:'key',sentAt:Date.now(),event:correctEvent});
+      emitCurrent({type:'key',sentAt:Date.now(),event:{...correctEvent,type:'keyup'}});
       await delay(25);
     };
     await press(); await press(); await press();
@@ -258,9 +297,10 @@ test('practice uses a snapshot, forwards physical events, halts stale input, and
     assert.equal(frame.html,'x','next file has its own persisted position');
     selection = undefined;
     await commands['codeType.selectRelayFiles']();
-    assert.ok(stored.has('relayFiles'),'canceling the picker preserves the queue');
+    assert.equal(relaySetting.length,2,'canceling the picker preserves the configured queue');
     await commands['codeType.clearRelayFiles']();
     assert.equal(stored.has('relayFiles'),false);
+    assert.deepEqual(relaySetting, [], 'clear overrides both configured and legacy queues');
     frame = messages.filter(m=>m.type==='code').at(-1);
     assert.equal(frame.relayCount,1);
     assert.equal(frame.html,'x','clearing the queue keeps current progress');
@@ -306,6 +346,48 @@ test('practice uses a snapshot, forwards physical events, halts stale input, and
     emitCurrent({type:'ready'});
     assert.equal(messages.filter(m=>m.type==='code').at(-1).html,'a\n    ','reopening restores the source offset after grouped whitespace');
     await commands['codeType.stop']();
+    source = 'a\n    b<>c';
+    browser.state = {ready:true, target:'hello', typed:'', wordIndex:0};
+    const type = async key => {
+      const next = {...event, key, code:key==='Backspace' ? key : `Key${key.toUpperCase()}`};
+      emitCurrent({type:'key',sentAt:Date.now(),event:next});
+      emitCurrent({type:'key',sentAt:Date.now(),event:{...next,type:'keyup'}});
+      await delay(30);
+    };
+    const code = () => messages.filter(m=>m.type==='code').at(-1);
+    await commands['codeType.start']();
+    emitCurrent({type:'ready'}); emitCurrent({type:'arm'});
+    await delay(10);
+    await type('h');
+    assert.equal(code().html, 'a', 'correct practice input reveals the original code');
+    await type('x');
+    assert.equal(code().html, 'ax', 'a typo replaces the entire newline and indentation step');
+    assert.equal(code().lines, 1, 'line count follows the actual displayed code');
+    await type('l');
+    assert.equal(code().html, 'axb', 'later correct input does not repair an earlier typo');
+    await commands['codeType.stop']();
+    await commands['codeType.start']();
+    emitCurrent({type:'ready'}); emitCurrent({type:'arm'});
+    await delay(10);
+    assert.equal(code().html, 'axb', 'reopening preserves both typo content and source progress');
+    await type('Backspace');
+    await type('Backspace');
+    assert.equal(code().html, 'a', 'backspacing removes the wrong display step');
+    await type('e');
+    assert.equal(code().html, 'a\n    ', 'correcting the typo restores grouped indentation');
+    await type('b');
+    assert.equal(code().html, 'a\n    ?', 'a wrong key matching the source still produces a visible typo');
+    await type('<');
+    await type('&');
+    assert.equal(code().html, 'a\n    ??&amp;', 'typos are escaped before rendering HTML');
+    assert.equal(document.getText(), source, 'typing mistakes never modify the real document');
+    await commands['codeType.resetProgress']();
+    assert.equal(code().html, '', 'reset clears displayed mistakes');
+    await commands['codeType.stop']();
+    await commands['codeType.start']();
+    emitCurrent({type:'ready'});
+    assert.equal(code().html, '', 'reset also clears persisted mistakes');
+    await commands['codeType.stop']();
     stored.set('practicePreferences',{displayMode:'statusbar',speechEnabled:false,statusbarWords:12});
     await commands['codeType.start']();
     emitCurrent({type:'ready'});
@@ -329,5 +411,41 @@ test('practice uses a snapshot, forwards physical events, halts stale input, and
       assert.equal('cornerWidth' in migrated,false);
       await commands['codeType.stop']();
     }
+    const { DictionaryStore, parseEntries } = require('../src/dictionaries');
+    const dictionaries = new DictionaryStore(path.join(context.globalStorageUri.fsPath, 'dictionaries'));
+    const terms = 'one two three four five six seven eight nine ten eleven twelve red blue green black white yellow orange purple violet';
+    await dictionaries.save({ id: 'local-test', name: 'Test words', kind: 'words', ...parseEntries(terms, 'words') });
+    vscode.ProgressLocation = { Notification: 1 };
+    vscode.window.withProgress = (_options, work) => work();
+    vscode.window.showQuickPick = async items => items.find(item => item.id === 'local-test' || item.value === 20 || item.value === 'shuffle');
+    await commands['codeType.dictionaries']();
+    assert.equal(stored.get('dictionarySelection').id, 'local-test', 'selection persists before practice opens');
+    await commands['codeType.start']();
+    emitCurrent({ type: 'ready' });
+    const latest = () => messages.filter(m => m.type === 'state').at(-1);
+    assert.equal(latest().wordPractice, true);
+    assert.equal(latest().dictionary.order, 'shuffle');
+    assert.equal(latest().dictionary.size, 20);
+    assert.equal(latest().target, 'one');
+    const importsBefore = calls.filter(c=>c.type==='dictionary-import').length;
+    for (const action of ['next-test', 'repeat-test']) {
+      browser.state = { ready: false, finished: true };
+      const before = browser.round;
+      emitCurrent({ type: action });
+      for(let i=0;i<50 && browser.round===before;i++) await delay(10);
+      assert.equal(calls.at(-1).type, 'next', 'use native website test buttons');
+      assert.equal(calls.at(-1).repeat, action==='repeat-test');
+      assert.equal(latest().wordPractice, true);
+      assert.equal(calls.filter(c=>c.type==='dictionary-import').length, importsBefore, 'Next and Repeat never reimport text');
+    }
+    await commands['codeType.stop']();
+    await commands['codeType.start']();
+    emitCurrent({ type: 'ready' });
+    assert.equal(latest().target, 'one');
+    assert.equal(calls.filter(c=>c.type==='dictionary-import').length, importsBefore, 'reopening keeps website settings and current text');
+    emitCurrent({ type: 'settings', settings: { mode: 'words', amount: 25, language: 'english', punctuation: false, numbers: false } });
+    for (let i=0;i<50 && stored.has('dictionarySelection');i++) await delay(10);
+    assert.equal(stored.has('dictionarySelection'), false, 'official settings leave library mode');
+    assert.equal(latest().wordPractice, undefined);
   } finally { await extension.deactivate(); }
 });

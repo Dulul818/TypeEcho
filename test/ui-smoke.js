@@ -142,7 +142,17 @@ async function main() {
     await state(0,'wo');
     await page.locator('#speech-enabled').uncheck();
     await page.locator('#speech-mode').selectOption('word');
+    await menuClick('#dictionaries');
+    assert.ok(await page.evaluate(() => window.messages.some(m => m.type === 'dictionaries')));
+    await page.evaluate(() => window.postMessage({ type: 'state', ready: true, testMode: 'custom', wordPractice: true,
+      target: 'cancel', wordIndex: 0, typed: '', preview: [{ index: 0, text: 'cancel' }],
+      dictionary: { name: 'CET-4 · 单词', order: 'shuffle', size: 20, total: 2607 } }));
+    await page.waitForFunction(() => document.getElementById('speech-mode').disabled);
+    assert.equal(await page.locator('#speech-mode').inputValue(), 'word');
+    assert.ok((await page.locator('#dictionaries').textContent()).includes('shuffle · 20 条 / 局'));
+    assert.equal(await page.locator('#next-test').textContent(), '下一局（官网）');
     await state(2);
+    await page.waitForFunction(() => !document.getElementById('speech-mode').disabled);
     await menuClick('#settings-toggle');
     await page.locator('#display-mode').selectOption('comment');
     await menuClick('#settings-toggle');
@@ -444,6 +454,10 @@ async function main() {
     assert.equal(await page.locator('#prompt-panel').isVisible(),false,'result and reading strip never overlap');
     assert.equal(await page.locator('#report').isVisible(),false,'automatic result stays compact until opened');
     assert.ok((await page.locator('#resume').textContent()).includes('XP +32 · Lv 17'));
+    await page.locator('#editor').focus();
+    const nextCount = await page.evaluate(()=>window.messages.filter(m=>m.type==='next-test').length);
+    await page.keyboard.press('Enter');
+    assert.equal(await page.evaluate(()=>window.messages.filter(m=>m.type==='next-test').length),nextCount+1,'Enter after completion requests exactly one next test');
     await page.locator('#resume').click();
     assert.ok(await page.evaluate(()=>window.messages.some(m=>m.type==='result')));
     await page.evaluate(()=>window.postMessage({type:'show-report'}));

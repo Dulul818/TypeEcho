@@ -100,7 +100,17 @@ function snapshotExpression(lightweight=false, fullSpeech=false) { return `(() =
   const selected=button=>button.classList.contains('[--themable-button-text:var(--themable-button-active)]') || button.getAttribute('aria-pressed')==='true' || button.classList.contains('active');
   const mode=buttons.find(button=>['time','words','quote','custom','zen'].includes(button.textContent.trim()) && selected(button))?.textContent.trim();
   const amount=mode==='words' ? Number(buttons.find(button=>/^\\d+$/.test(button.textContent.trim()) && selected(button) && Array.from(button.parentElement?.querySelectorAll('button') || []).some(sibling=>sibling.textContent.trim()==='25'))?.textContent.trim()) : 0;
-  const speechEnd=mode==='quote' ? indexOf(elements.at(-1),elements.length-1)+1 : amount>0 ? amount : null;
+  if (mode==='custom' && !identity.customRead) {
+    identity.customRead=true;
+    try {
+      const custom=JSON.parse(localStorage.getItem('customTextSettings') || 'null');
+      if (custom?.limit?.mode==='word' && Number.isInteger(custom.limit.value) && custom.limit.value>0) identity.customEnd=custom.limit.value;
+      if (custom?.limit?.mode==='section' && custom.limit.value>0 && first && elements.length<100) identity.customEnd=elements.length;
+      identity.customMode=custom?.mode;
+      identity.customLimit=custom?.limit;
+    } catch { /* An unavailable custom setting leaves the round length unknown. */ }
+  }
+  const speechEnd=mode==='quote' ? indexOf(elements.at(-1),elements.length-1)+1 : amount>0 ? amount : mode==='custom' ? identity.customEnd ?? null : null;
   const speechRevision=testId+':'+elements.length+':'+indexOf(elements.at(-1),elements.length-1)+':'+mode+':'+speechEnd;
   const speechStart=${fullSpeech ? '0' : 'Math.max(0,activeOffset-96)'};
   const speechWords=elements.slice(speechStart,${fullSpeech ? 'elements.length' : 'activeOffset+97'}).map((el,index)=>({index:indexOf(el,speechStart+index),text:text(el)}));
@@ -117,7 +127,7 @@ function snapshotExpression(lightweight=false, fullSpeech=false) { return `(() =
     return { index, text:text(el), ...(feedback ? {feedback} : {}) };
   });
   if (!/^[\\x20-\\x7e]*$/.test(target)) return {ready:false, reason:'目前仅支持英文单词测试。'};
-  return {ready: document.activeElement === input, target, next, wordIndex, preview, speechWords, speechEnd, speechRevision, testMode:mode, testId, level, typed: (input.value || '').replace(/^ /,''), reason: document.activeElement === input ? '' : '官网输入框失去焦点，请在官网点击单词区域后重新开始。'};
+  return {ready: document.activeElement === input, target, next, wordIndex, preview, speechWords, speechEnd, speechRevision, testMode:mode, testId, customMode:mode==='custom' ? identity.customMode : undefined, customLimit:mode==='custom' ? identity.customLimit : undefined, level, typed: (input.value || '').replace(/^ /,''), reason: document.activeElement === input ? '' : '官网输入框失去焦点，请在官网点击单词区域后重新开始。'};
 })()`; }
 const SNAPSHOT=snapshotExpression();
 const INPUT_GUARD=snapshotExpression(true);
@@ -255,11 +265,17 @@ class BrowserBridge extends EventEmitter {
 
   async clickTestButton(selector) {
     if (!['#nextTestButton', '#restartTestButtonWithSameWordset'].includes(selector)) throw new Error('不支持的测试操作。');
+    const buttons = selector === '#nextTestButton'
+      ? '[data-ui-element="restartTestButton"], #nextTestButton'
+      : '[data-ui-element="restartTestButtonWithSameWordset"], #restartTestButtonWithSameWordset';
     const clicked = await this.evaluate(`(() => {
       if (location.origin !== 'https://monkeytype.com' || location.pathname !== '/' || document.visibilityState === 'hidden') return false;
       const result = document.querySelector('#result');
-      const button = result?.querySelector(${JSON.stringify(selector)});
-      if (!result?.getClientRects().length || !button?.getClientRects().length || button.disabled) return false;
+      const visible = el => !!el?.getClientRects().length && getComputedStyle(el).visibility !== 'hidden';
+      if (!visible(result)) return false;
+      // Scope to the result: the running test has a restart button with the same marker.
+      const button = Array.from(result.querySelectorAll(${JSON.stringify(buttons)})).find(el => visible(el) && !el.disabled && el.getAttribute('aria-disabled') !== 'true');
+      if (!button) return false;
       button.click(); return true;
     })()`);
     if (!clicked) throw new Error('官网尚未显示可用的下一场按钮，请等待结算完成。');
@@ -318,6 +334,72 @@ class BrowserBridge extends EventEmitter {
       await new Promise(resolve => setTimeout(resolve, 400));
     }
     return this.waitForTest();
+  }
+
+  async applyDictionary(file, options) {
+    if (!['repeat', 'shuffle', 'random'].includes(options.order) || !Number.isInteger(options.size) || options.size < 1 || options.size > 100) throw new Error('官网出词选项无效。');
+    if (!path.isAbsolute(file) || path.extname(file) !== '.txt') throw new Error('词库导入需要本地 TXT 文件。');
+    const text = await fs.promises.readFile(file, 'utf8');
+    if (!text || Buffer.byteLength(text) > 20 * 1024 * 1024) throw new Error('词库为空或超过 20 MiB。');
+    const alreadyLoaded = await this.matchesDictionary(file);
+    for (let i = 0; this.requests.size && i < 80; i++) await new Promise(resolve => setTimeout(resolve, 100));
+    if (this.requests.size) throw new Error('官网仍在提交成绩，请稍后再更改设置。');
+    if (!(await this.snapshot()).finished) await this.waitForTest();
+    const click = async (root, label) => {
+      const done = await this.evaluate(`(() => {
+        if(location.origin!=='https://monkeytype.com' || location.pathname!=='/') return false;
+        const buttons=Array.from(document.querySelector(${JSON.stringify(root)})?.querySelectorAll('button') || []);
+        const button=buttons.find(b=>b.textContent.trim()===${JSON.stringify(label)} && b.getClientRects().length && !b.disabled);
+        if(!button) return false; button.click(); return true;
+      })()`);
+      if (!done) throw new Error(`官网 ${label} 选项不可用，请关闭官网弹窗后重试。`);
+    };
+    const wait = async expression => {
+      for (let i=0;i<60;i++) {
+        if (await this.evaluate(expression)) return;
+        await new Promise(resolve=>setTimeout(resolve,100));
+      }
+      throw new Error('官网自定义设置未完成，请在官网检查后重试。');
+    };
+    const config = '[data-ui-element="testConfig"]';
+    const modal = '.modal:has(textarea[name="text"])';
+    await click(config, 'custom');
+    await click(config, 'change');
+    await wait(`!!document.querySelector(${JSON.stringify(modal)})?.getClientRects().length`);
+    // Switching delimiter rewrites the textarea; set it BEFORE importing intact sections.
+    await click(modal, 'pipe');
+    // Use the site's existing file importer and form handlers, never its private modules or storage setters.
+    if (!alreadyLoaded) {
+      const input = await this.call('Runtime.evaluate', { expression: `document.querySelector(${JSON.stringify(modal + ' input[type="file"]')})` }, this.sessionId);
+      if (!input.result.objectId) throw new Error('官网文件导入入口不可用。');
+      try { await this.call('DOM.setFileInputFiles', { objectId: input.result.objectId, files: [file] }, this.sessionId); }
+      finally { await this.call('Runtime.releaseObject', { objectId: input.result.objectId }, this.sessionId).catch(()=>{}); }
+    }
+    await wait(`document.querySelector(${JSON.stringify(modal + ' textarea')})?.value === ${JSON.stringify(text)}`);
+    await click(modal, options.order);
+    const filled = await this.evaluate(`(() => {
+      const input=document.querySelector(${JSON.stringify(modal + ' input[placeholder="sections"]')});
+      if(!input || input.disabled || !input.getClientRects().length) return false;
+      input.value=${JSON.stringify(String(options.size))}; input.dispatchEvent(new Event('input',{bubbles:true})); return true;
+    })()`);
+    if (!filled) throw new Error('官网数量选项不可用。');
+    const previous = (await this.snapshot()).testId;
+    await click(modal, 'ok');
+    await wait(`!document.querySelector(${JSON.stringify(modal)})?.getClientRects().length`);
+    await wait(`(${SNAPSHOT}).testId !== ${JSON.stringify(previous)}`);
+    const state = await this.waitForTest();
+    this.round++;
+    this.latestReceipt = undefined;
+    return state;
+  }
+
+  async matchesDictionary(file) {
+    const text = await fs.promises.readFile(file, 'utf8');
+    return this.evaluate(`(() => {
+      if(location.origin!=='https://monkeytype.com' || location.pathname!=='/') return false;
+      try { const settings=JSON.parse(localStorage.getItem('customTextSettings')); return settings?.pipeDelimiter===true && settings.text?.join('|')===${JSON.stringify(text)}; }
+      catch { return false; }
+    })()`);
   }
 
   async sendKey(event) {

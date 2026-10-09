@@ -23,7 +23,7 @@
   let spokenWord;
   let speechMode='word';
   let activeSpeechMode;
-  const effectiveSpeechMode=()=>promptState?.testMode==='words' ? 'word' : speechMode;
+  const effectiveSpeechMode=()=>(promptState?.testMode==='words' || promptState?.wordPractice) ? 'word' : speechMode;
   let spokenSentenceStart=-1;
   let activeSentence;
   let hybridWordPhase=false;
@@ -453,11 +453,17 @@
   const nextTest = document.getElementById('next-test');
   const repeatTest = document.getElementById('repeat-test');
   function buttons() {
+    const library = promptState?.dictionary;
+    const dictionaryButton = document.getElementById('dictionaries');
+    dictionaryButton.textContent = library ? `${library.name} · ${library.order} · ${library.size} 条 / 局` : '词库与导入…';
+    dictionaryButton.disabled = busy;
+    nextTest.textContent = library ? '下一局（官网）' : 'Next test';
+    repeatTest.textContent = library ? '重复本局（官网）' : 'Repeat test';
     for (const button of [nextTest,repeatTest,document.getElementById('report-next'),document.getElementById('report-repeat')]) button.disabled = !finished || busy;
-    const forced=promptState?.testMode==='words';
+    const forced=promptState?.testMode==='words' || promptState?.wordPractice;
     speechModeControl.disabled=forced;
     speechModeControl.value=forced ? 'word' : speechMode;
-    speechModeControl.title=forced ? '官网 words 模式固定逐词朗读；其他模式使用已保存的选择' : '';
+    speechModeControl.title=forced ? '单词库固定逐词朗读；其他模式使用已保存的选择' : '';
     document.getElementById('speech-replay').hidden=effectiveSpeechMode()==='word';
     document.getElementById('speech-replay').disabled = !speechEnabled || busy || finished || !promptState?.sentence || forced;
   }
@@ -486,6 +492,7 @@
   promptPanel.addEventListener('mousedown', event => { event.preventDefault(); editor.focus({preventScroll:true}); });
   promptPanel.addEventListener('click', () => { if (!armed && !finished) arm(); });
   document.getElementById('open').addEventListener('click', () => send('browser'));
+  document.getElementById('dictionaries').addEventListener('click', () => send('dictionaries'));
   document.getElementById('result').addEventListener('click', () => send('result'));
   document.getElementById('relay-files').addEventListener('click', () => send('relay-files'));
   document.getElementById('relay-clear').addEventListener('click', () => send('relay-clear'));

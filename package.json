@@ -2,7 +2,7 @@
   "name": "code-type-bridge",
   "displayName": "TypeEcho 键语",
   "description": "在 VS Code 中练习英文打字，连接 Monkeytype，支持逐词跟读、异步语音预生成和参考音频管理。",
-  "version": "1.0.0",
+  "version": "1.1.3",
   "publisher": "local-prototype",
   "license": "MIT",
   "repository": {
@@ -31,6 +31,10 @@
   },
   "contributes": {
     "commands": [
+      {
+        "command": "codeType.dictionaries",
+        "title": "TypeEcho: 词库与导入"
+      },
       {
         "command": "codeType.references",
         "title": "TypeEcho: 参考音频与试听"
@@ -71,6 +75,13 @@
     "configuration": {
       "title": "TypeEcho 键语",
       "properties": {
+        "codeType.relayFiles": {
+          "type": ["array", "null"],
+          "items": { "type": "string", "minLength": 1 },
+          "default": null,
+          "scope": "resource",
+          "description": "按顺序接力的代码文件路径。相对路径从所属工作区文件夹解析，也支持绝对路径。null 沿用旧队列，[] 清空队列。直接编辑配置后重新打开练习生效。"
+        },
         "codeType.ttsReferenceLibrary": {
           "type": "string",
           "default": "",

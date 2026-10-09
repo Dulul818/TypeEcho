@@ -1,6 +1,6 @@
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
-const {codeProgress} = require('../src/code-progress');
+const {codeProgress, codeText, codeTypo} = require('../src/code-progress');
 
 test('line breaks and indentation reveal together, with ordinary spaces unchanged', () => {
   const source = 'a\n    b c\n\t\td\n  \t e';
@@ -37,4 +37,34 @@ test('nested blocks preserve source indentation and dedentation as full steps', 
     assert.ok(cuts.includes(end));
     assert.ok(!cuts.some(offset=>offset>match.index && offset<end));
   }
+});
+
+test('typos replace code steps, including whitespace, without changing the source', () => {
+  const source = 'a\n    b c';
+  const {cuts, errors} = codeProgress(source);
+  const state = {ready:true, target:'hello', typed:''};
+  assert.equal(codeTypo(source, cuts, 0, 'h', state), undefined);
+  assert.equal(codeTypo(source, cuts, 0, 'x', state), 'x');
+  assert.equal(codeTypo(source, cuts, 0, 'a', state), '?');
+  assert.equal(codeTypo('?', [0,1], 0, '?', state), '!');
+  assert.equal(codeTypo(source, cuts, 0, ' ', {...state, typed:'hello'}), undefined);
+  assert.equal(codeTypo(source, cuts, 0, ' ', {...state, typed:'he'}), ' ');
+  assert.equal(codeTypo(source, cuts, 0, 'x', {...state, typed:'hello'}), 'x');
+  errors.set(1, 'x');
+  errors.set(0, '<');
+  assert.equal(codeText(source, cuts, 3, errors), '<xb');
+  errors.delete(1);
+  assert.equal(codeText(source, cuts, 2, errors), '<\n    ');
+  errors.delete(0);
+  assert.equal(codeText(source, cuts, 2, errors), 'a\n    ');
+  assert.equal(source, 'a\n    b c');
+});
+
+test('saved typo steps restore with progress and invalid entries are discarded', () => {
+  const source = 'abc';
+  const restored = codeProgress(source, {offset:2, errors:[[1,'x'],[0,'<'],[-1,'z'],[2,'z'],[0,'<script>'],null]});
+  assert.equal(codeText(source, restored.cuts, restored.progress, restored.errors), '<x');
+  assert.equal(codeProgress(source, {offset:0, errors:[[0,'x']]}).errors.size, 0);
+  assert.equal(codeProgress(source, {offset:2}).errors.size, 0);
+  assert.equal(codeProgress(source, {offset:2, errors:{0:'x'}}).errors.size, 0);
 });

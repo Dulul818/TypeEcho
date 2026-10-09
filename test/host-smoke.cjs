@@ -13,6 +13,7 @@ exports.run = async function () {
   assert.equal(typeof api.htmlFor, 'function');
   const commands = await vscode.commands.getCommands(true);
   assert.ok(commands.includes('codeType.start'));
+  assert.ok(commands.includes('codeType.dictionaries'));
   const browser = new BrowserBridge();
   try {
     await browser.launch(findBrowser(), path.resolve(__dirname, '../.test-output/host-browser-profile'), ['--headless=new', '--disable-gpu']);
