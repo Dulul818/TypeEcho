@@ -2,9 +2,9 @@
 
 在 VS Code 中练习英文打字，同时听单词和句子。TypeEcho 将真实按键连接到浏览器中的 Monkeytype，在独立练习页逐步显示当前代码文件，并提供逐词跟读、异步语音预生成和参考音频管理。
 
-**正式版：1.0.0** · [下载安装包](https://github.com/Dulul818/TypeEcho/releases/latest) · [更新记录](CHANGELOG.md) · [开发与自测](docs/development.md) · [GPT-SoVITS 配置](docs/gpt-sovits.md)
+**正式版：1.1.3** · [下载安装包](https://github.com/Dulul818/TypeEcho/releases/latest) · [更新记录](CHANGELOG.md) · [开发与自测](docs/development.md) · [GPT-SoVITS 配置](docs/gpt-sovits.md)
 
-当前工作区为 **1.1.3 本地测试版，尚未发布**。修复 Monkeytype 改版后的换局及成绩读取，包含接力文件配置及 [四级词库、例句及自动导入](docs/dictionaries.md)；本地安装包为 `releases/typeecho-1.1.3.vsix`，正式下载仍为 1.0.0。
+**1.1.3** 修复 Monkeytype 改版后的换局及成绩读取，包含接力文件配置及 [四级词库、例句及自动导入](docs/dictionaries.md)。发布包为 `typeecho-1.1.3.vsix`，可覆盖安装升级。
 
 ## 功能
 
@@ -25,14 +25,14 @@ TypeEcho 使用代码文件的内存快照，包括尚未保存的修改。它�
 
 日常使用需要 **VS Code 1.100+**、**Google Chrome** 和英文输入法。Windows 是当前实机验证平台；其他桌面系统的兼容边界见下文。
 
-1. 从 [Releases](https://github.com/Dulul818/TypeEcho/releases/latest) 下载 `typeecho-1.0.0.vsix`。
+1. 从 [Releases](https://github.com/Dulul818/TypeEcho/releases/latest) 下载 `typeecho-1.1.3.vsix`。
 2. 在 VS Code 扩展面板右上角 `…` 选择“从 VSIX 安装”。
 3. 安装或升级后执行 **Developer: Reload Window**。
 
 也可以通过终端安装：
 
 ```sh
-code --install-extension typeecho-1.0.0.vsix --force
+code --install-extension typeecho-1.1.3.vsix --force
 ```
 
 从旧版 Code Type Bridge 升级时直接覆盖安装即可。为保留已有登录目录、进度和偏好，内部扩展 ID 仍为 `local-prototype.code-type-bridge`，命令 ID 和设置项仍使用 `codeType.*`；界面名称统一为 **TypeEcho 键语**。无需同时安装两个插件。
@@ -167,7 +167,7 @@ pnpm test:ui
 pnpm package
 ```
 
-安装包输出到 `releases/typeecho-1.0.0.vsix`。浏览器检查需要 Chrome，Playwright 已列入开发依赖。目录、自测范围和发布步骤见 [开发说明](docs/development.md)。
+安装包输出到 `releases/typeecho-1.1.3.vsix`。浏览器检查需要 Chrome，Playwright 已列入开发依赖。目录、自测范围和发布步骤见 [开发说明](docs/development.md)。
 
 ## 许可
 
